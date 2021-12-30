@@ -286,6 +286,34 @@ class VxmDense(LoadableModel):
         else:
             return y_source, pos_flow
 
+class VxmDenseSemiSupervisedSeg(LoadableModel):
+    """
+    VoxelMorph network for (unsupervised) nonlinear registration between two images.
+    """
+
+    @store_config_args
+    def __init__(self, seg_resolution=2, **kwargs):
+        """ 
+        Use the same arguments as the VxmDense Model
+        """
+        super().__init__()
+        self.training = True
+
+        self.seg_resolution = seg_resolution
+
+
+        # cache the model
+        self.vxm_dense = VxmDense(**kwargs)
+
+    def forward(self, source, target, source_seg, registration=False):
+        ysource, pre_int_flow = self.vxm_dense(source, target, registration)
+        pos_flow = self.vxm_dense.integrate(pre_int_flow)
+        seg_flow = layers.ResizeTransform(1/self.seg_resolution, 3)(pos_flow)
+        source2target_seg = self.vxm_dense.transformer(source_seg, seg_flow)
+        y_seg = layers.ResizeTransform(self.seg_resolution, 3)(source2target_seg)
+        flow = pos_flow if registration else pre_int_flow
+        return (ysource, flow, y_seg)
+
 
 class ConvBlock(nn.Module):
     """

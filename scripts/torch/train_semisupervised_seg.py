@@ -1,37 +1,7 @@
 #!/usr/bin/env python
 
 """
-Example script to train a VoxelMorph model.
-
-You will likely have to customize this script slightly to accommodate your own data. All images
-should be appropriately cropped and scaled to values between 0 and 1.
-
-If an atlas file is provided with the --atlas flag, then scan-to-atlas training is performed.
-Otherwise, registration will be scan-to-scan.
-
-If you use this code, please cite the following, and read function docs for further info/citations.
-
-    VoxelMorph: A Learning Framework for Deformable Medical Image Registration G. Balakrishnan, A.
-    Zhao, M. R. Sabuncu, J. Guttag, A.V. Dalca. IEEE TMI: Transactions on Medical Imaging. 38(8). pp
-    1788-1800. 2019. 
-
-    or
-
-    Unsupervised Learning for Probabilistic Diffeomorphic Registration for Images and Surfaces
-    A.V. Dalca, G. Balakrishnan, J. Guttag, M.R. Sabuncu. 
-    MedIA: Medical Image Analysis. (57). pp 226-236, 2019 
-
-Copyright 2020 Adrian V. Dalca
-
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in
-compliance with the License. You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software distributed under the License is
-distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-implied. See the License for the specific language governing permissions and limitations under the
-License.
+Semisupervised variant in PyTorch
 """
 
 import os
@@ -40,9 +10,6 @@ import argparse
 import time
 import numpy as np
 import torch
-
-from torch.nn import DataParallel
-from torch.backends import cudnn
 
 # import voxelmorph with pytorch backend
 os.environ['VXM_BACKEND'] = 'pytorch'
@@ -53,33 +20,28 @@ parser = argparse.ArgumentParser()
 
 # data organization parameters
 parser.add_argument('--img-list', required=True, help='line-seperated list of training files')
-parser.add_argument('--img-suffix', help='input image file suffix')
-parser.add_argument('--seg-suffix', help='input seg file suffix')
-parser.add_argument('--img-prefix', help='input image file prefix')
-parser.add_argument('--seg-prefix', help='input seg file prefix')
-# parser.add_argument('--labels', required=True, help='label list (npy format) to use in dice loss')
-parser.add_argument('--multichannel', action='store_true',
-                    help='specify that data has multiple channels')
-
-parser.add_argument('--lambda', type=float, dest='weight', default=0.01,
-                    help='weight of deformation loss (default: 0.01)')
-parser.add_argument('--bidir', action='store_true', help='enable bidirectional cost function')
-parser.add_argument('--batch-size', type=int, default=1, help='batch size (default: 1)')
-parser.add_argument('--load-model', help='optional model file to initialize with')
+parser.add_argument('--img-prefix', help='optional input image file prefix')
+parser.add_argument('--img-suffix', help='optional input image file suffix')
+parser.add_argument('--seg-prefix', help='input sef file prefix')
+parser.add_argument('--seg-suffix', help='input sef file suffix')
+parser.add_argument('--labels', required=True, help="ground truth needed for DICE loss")
+parser.add_argument('--atlas', help='atlas filename (default: data/atlas_norm.npz)')
 parser.add_argument('--model-dir', default='models',
                     help='model output directory (default: models)')
-parser.add_argument('--atlas', help='optional atlas to perform scan-to-atlas training')
 
 # training parameters
-parser.add_argument('--gpu', default='0', help='GPU ID numbers (default: 0)')
+parser.add_argument('--gpu', default='0', help='GPU ID number(s), comma-separated (default: 0)')
+parser.add_argument('--batch-size', type=int, default=1, help='batch size (default: 1)')
 parser.add_argument('--epochs', type=int, default=1500,
                     help='number of training epochs (default: 1500)')
 parser.add_argument('--steps-per-epoch', type=int, default=100,
                     help='frequency of model saves (default: 100)')
-parser.add_argument('--load-weights', help='optional weights file to initialize with')
+parser.add_argument('--load-model', help='optional model file to initialize with')
 parser.add_argument('--initial-epoch', type=int, default=0,
                     help='initial epoch number (default: 0)')
 parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (default: 1e-4)')
+parser.add_argument('--cudnn-nondet', action='store_true',
+                    help='disable cudnn determinism - might slow down training')
 
 # network architecture parameters
 parser.add_argument('--enc', type=int, nargs='+',
@@ -98,26 +60,27 @@ parser.add_argument('--grad-loss-weight', type=float, default=0.01,
                     help='weight of gradient loss (lamba) (default: 0.01)')
 parser.add_argument('--dice-loss-weight', type=float, default=0.01,
                     help='weight of dice loss (gamma) (default: 0.01)')
+
 args = parser.parse_args()
 
-bidir = args.bidir
+if args.img_prefix == args.seg_prefix and args.img_suffix == args.seg_suffix:
+    print('Error: Must provide a differing file suffix and/or prefix for images and segs.')
+    exit(1)
 
 # load and prepare training data
 train_imgs = vxm.py.utils.read_file_list(args.img_list, prefix=args.img_prefix,
                                           suffix=args.img_suffix)
 
-
 train_segs = vxm.py.utils.read_file_list(args.img_list, prefix=args.seg_prefix,
-                                          suffix=args.img_suffix)
+                                          suffix=args.seg_suffix)
 
 assert len(train_imgs) > 0, 'Could not find any training data.'
 
-# no need to append an extra feature axis if data is multichannel
-train_labels = np.array([0])
-add_feat_axis = not args.multichannel
+train_labels = np.load(args.labels)
 
+# generator (scan-to-scan unless the atlas cmd argument was provided)
 generator = vxm.generators.semisupervised(
-    train_imgs, train_segs, labels=train_labels, atlas_file=args.atlas, downsize=1)
+    train_imgs, train_segs, labels=train_labels, atlas_file=args.atlas)
 
 # extract shape from sampled input
 inshape = next(generator)[0][0].shape[1:-1]
@@ -135,7 +98,7 @@ assert np.mod(args.batch_size, nb_gpus) == 0, \
     'Batch size (%d) should be a multiple of the nr of gpus (%d)' % (args.batch_size, nb_devices)
 
 # enabling cudnn determinism appears to speed up training by a lot
-cudnn.deterministic = True # not args.cudnn_nondet
+torch.backends.cudnn.deterministic = not args.cudnn_nondet
 
 # unet architecture
 enc_nf = args.enc if args.enc else [16, 32, 32, 32]
@@ -149,7 +112,6 @@ else:
     model = vxm.networks.VxmDenseSemiSupervisedSeg(
         inshape=inshape,
         nb_unet_features=[enc_nf, dec_nf],
-        bidir=bidir,
         int_steps=args.int_steps,
         int_downsize=args.int_downsize
     )
@@ -174,21 +136,10 @@ elif args.image_loss == 'mse':
 else:
     raise ValueError('Image loss should be "mse" or "ncc", but found "%s"' % args.image_loss)
 
-
-# need two image loss functions if bidirectional
-if bidir:
-    losses = [image_loss_func, image_loss_func, ]
-    weights = [0.5, 0.5]
-else:
-    losses = [image_loss_func, ]
-    weights = [1]
-
-# prepare deformation loss
-losses += [vxm.losses.Grad('l2', loss_mult=args.int_downsize).loss]
-weights += [args.weight]
-
-losses += [vxm.losses.Dice().loss]
-weights += [args.dice_loss_weight]
+# losses
+losses = [image_loss_func, vxm.losses.Grad(
+    'l2', loss_mult=args.int_downsize).loss, vxm.losses.Dice().loss]
+weights = [1, args.grad_loss_weight, args.dice_loss_weight]
 
 # training loops
 for epoch in range(args.initial_epoch, args.epochs):
