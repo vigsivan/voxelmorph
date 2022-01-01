@@ -146,7 +146,7 @@ def scan_to_atlas(vol_names, atlas, bidir=False, batch_size=1, no_warp=False, se
             outvols.append(zeros)
         yield (invols, outvols)
 
-def neurreg(vol_names, seg_names, labels, atlas_file=None, downsize=2):
+def neurreg(vol_names, seg_names, labels, atlas_file=None): #, downsize=2):
     gen = volgen(vol_names, segs=seg_names, np_var='vol')
     regsim=None
     zeros=None
@@ -156,7 +156,7 @@ def neurreg(vol_names, seg_names, labels, atlas_file=None, downsize=2):
         prob_seg = np.zeros((*seg.shape[:4], len(labels)))
         for i, label in enumerate(labels):
             prob_seg[0, ..., i] = seg[0, ..., 0] == label
-        return prob_seg[:, ::downsize, ::downsize, ::downsize, :]
+        return prob_seg#[:, ::downsize, ::downsize, ::downsize, :]
 
     while True:
         src_vol, src_seg = next(gen)
@@ -175,7 +175,7 @@ def neurreg(vol_names, seg_names, labels, atlas_file=None, downsize=2):
             zeros = np.zeros((1, *shape, len(shape)))
 
         invols = [src_vol, trg_vol, src_seg, displacement_field]
-        outvols = ()
+        outvols = [trg_vol, trg_seg]
         yield (invols, outvols)
 
 

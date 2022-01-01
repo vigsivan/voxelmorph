@@ -88,7 +88,7 @@ class EPE:
     def loss(self, true_field, predicted_field):
         tf, pf = (true_field.reshape((self.ndim, -1)), 
                   predicted_field.reshape((self.ndim, -1)))
-        return (1./self.N) * torch.sqrt((tf - pf).pow(2).sum(dim=0))
+        return (1./self.N) * torch.sqrt((tf - pf).pow(2).sum(dim=1)).sum(0)
 
 class Dice:
     """

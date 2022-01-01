@@ -32,7 +32,7 @@ if debug:
         enc = [16, 32, 32, 32],
         dec=[32, 32, 32, 32, 32, 16, 16],
         int_steps=7,
-        int_downsize=2,
+        int_downsize=1,
         gpu='0',
         batch_size=1,
         epochs=1500,
@@ -173,35 +173,78 @@ else:
     raise ValueError('Image loss should be "mse" or "ncc", but found "%s"' % args.image_loss)
 
 # losses
-losses = [image_loss_func, vxm.losses.Grad(
-    'l2', loss_mult=args.int_downsize).loss, vxm.losses.Dice().loss]
-weights = [1, args.grad_loss_weight, args.dice_loss_weight]
-
 num_pixels = np.prod(inshape)
 supervised_losses = [vxm.losses.EPE(num_pixels, 3).loss, image_loss_func, vxm.losses.Dice().loss]
-weights = [1, .1, .1]
+weights = [1, 10, 10]
 
 semisupervised_losses = [image_loss_func, vxm.losses.Dice().loss]
-weights [1, .1]
+weights = [10, 10]
 
 #%%
-
+# FIXME: remove this once you're done testing!!
 from torch import nn
 
-inputs, _ = next(generator)
+inputs, semisupervised_true = next(generator)
 inputs[:-1] = [torch.from_numpy(d).to(device).float().permute(0, 4, 1, 2, 3) for d in inputs[:-1]]
-inputs[-1] = torch.from_numpy(inputs[-1]).float().unsqueeze(0)
+inputs[-1] = torch.from_numpy(inputs[-1]).float().unsqueeze(0).to(device)
 
-vxm_dense = vxm.networks.VxmDense(
-        inshape=inshape,
-        nb_unet_features=[enc_nf, dec_nf],
-        int_steps=args.int_steps,
-        int_downsize=args.int_downsize)
+#%%
+semisupervised_true = [torch.from_numpy(d).to(device).float().permute(0, 4, 1, 2, 3) for d in semisupervised_true]
 
-conv_w_softmax = conv_w_softmax = nn.Sequential(
-        nn.Conv3d(vxm_dense.unet_model.final_nf+1, 1, kernel_size=3), 
-        nn.Softmax())
+# %%
+outputs = model(*inputs)
+supervised_true, y_supervised, y_semisupervised = outputs
+loss = 0
+loss_list = []
 
+for i, loss_function in enumerate(supervised_losses):
+    curr_loss = loss_function(
+        supervised_true[i], y_supervised[i]
+    )
+    loss += curr_loss
+    loss_list.append(curr_loss)
+
+for i, loss_function in enumerate(semisupervised_losses):
+    curr_loss = loss_function(
+        semisupervised_true[i], y_semisupervised[i]
+    )
+    loss += curr_loss
+    loss_list.append(curr_loss)
+#%%
+# l0 = supervised_losses[0](supervised_true[0], y_supervised[0])
+# l1 = supervised_losses[1](supervised_true[1], y_supervised[1])
+# l2 = supervised_losses[2](supervised_true[2], y_supervised[2])
+# for n, loss_function in enumerate(supervised_losses):
+#     curr_loss = loss_function(supervised_true[n], y_supervised[n])
+#     loss += curr_loss
+#     loss_list.append(curr_loss)
+# %%
+# 
+# vxm_dense = vxm.networks.VxmDense(
+#         inshape=inshape,
+#         nb_unet_features=[enc_nf, dec_nf],
+#         int_steps=args.int_steps,
+#         int_downsize=args.int_downsize).to(device)
+# #%%
+# conv_w_softmax = conv_w_softmax = nn.Sequential(
+#         nn.Conv3d(vxm_dense.unet_model.final_nf+1, 1, kernel_size=3, padding=1), 
+#         nn.Softmax()).to(device)
+
+# #%%
+
+# source, target, source_seg, displacement_field = inputs
+# src2trg_image, pre_int_flow_trg = vxm_dense(source, target, False)
+# pos_flow_trg = vxm_dense.integrate(pre_int_flow_trg)
+# # seg_flow_trg = vxm.layers.ResizeTransform(1/2, 3)(pos_flow_trg)
+# src2trg_seg = vxm_dense.transformer(source_seg, pos_flow_trg)
+
+# # %%
+# src2_trg_seg_concat = torch.cat((vxm_dense.unet_output, src2trg_seg), dim=1)
+# src2_trg_seg_boosted = conv_w_softmax(src2_trg_seg_concat)
+# # src2trg_seg_resized = vxm.layers.ResizeTransform(
+# #     2, 3)(src2_trg_seg_boosted)
+
+# # y_semisupervised = [src2trg_image, src2trg_seg_resized]
 #%%
 # training loops
 for epoch in range(args.initial_epoch, args.epochs):
