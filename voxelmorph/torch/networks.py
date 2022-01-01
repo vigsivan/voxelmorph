@@ -343,7 +343,7 @@ class NeurRegModel(LoadableModel):
         self.vxm_dense = VxmDense(**kwargs)
         self.conv_w_softmax = nn.Sequential(
             nn.Conv3d(self.vxm_dense.unet_model.final_nf+seg_classes, seg_classes, kernel_size=3, padding=1), 
-            nn.Softmax()
+            nn.Softmax(dim=1)
         )
 
     def forward(self, source, target, source_seg, displacement_field=None):

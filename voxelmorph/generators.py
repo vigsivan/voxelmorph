@@ -146,7 +146,7 @@ def scan_to_atlas(vol_names, atlas, bidir=False, batch_size=1, no_warp=False, se
             outvols.append(zeros)
         yield (invols, outvols)
 
-def neurreg(vol_names, seg_names, labels, atlas_file=None): #, downsize=2):
+def neurreg(vol_names, seg_names, labels, atlas_file=None):
     gen = volgen(vol_names, segs=seg_names, np_var='vol')
     regsim=None
     zeros=None
