@@ -315,6 +315,95 @@ class VxmDenseSemiSupervisedSeg(LoadableModel):
         return (ysource, flow, y_seg)
 
 
+class NeurRegModel(LoadableModel):
+    """
+    Network for Multi-task Learning (Neurreg)
+    """
+
+    @store_config_args
+    def __init__(self, seg_resolution=2, seg_classes=1, **kwargs):
+        """
+        Use the same arguments as the VxmDense Model
+        """
+        # NOTE: I don't care about bidirectional, because Zhu et al. don't
+        super().__init__()
+
+        self.training = True
+        self.seg_resolution = seg_resolution
+        self.vxm_dense = VxmDense(**kwargs)
+        self.conv_w_softmax = nn.Sequential(
+            nn.Conv3d(self.vxm_dense.unet_model.final_nf+seg_classes, seg_classes, kernel_size=3), 
+            nn.Softmax()
+        )
+
+    def forward(self, source, target, source_seg, displacement_field=None):
+        """
+        Parameters
+        ----------
+        source: source (moving) volume
+        target: target volume
+        source_seg: moving segmentation
+        displacement_field: displacement tensor
+            If none, performs registration (as registration=False for the other networks)
+        """
+
+        def transform(src, field):
+            """
+            Helper function for transforming inputs using displacement field (without grad)
+            """
+            with torch.no_grad():
+                tsfmed = self.vxm_dense.transformer(src, field)
+            return tsfmed
+
+        
+        registration = displacement_field is None
+
+        # target image registration
+        src2trg_image, pre_int_flow_trg = self.vxm_dense(
+            source, target, registration)
+        pos_flow_trg = (self.vxm_dense.integrate(pre_int_flow_trg)
+                        if not registration else pre_int_flow_trg)
+        seg_flow_trg = layers.ResizeTransform(
+            1/self.seg_resolution, 3)(pos_flow_trg)
+        src2trg_seg = self.vxm_dense.transformer(source_seg, seg_flow_trg)
+
+        # FIXME: Fix the tensor dimensions and double check remaining
+        src2_trg_seg_concat = torch.concat(self.vxm_dense.unet_model.remaining[-1], src2trg_seg)
+        src2_trg_seg_boosted = self.conv_w_softmax(src2_trg_seg_concat)
+        src2trg_seg_resized = layers.ResizeTransform(
+            self.seg_resolution, 3)(src2_trg_seg_boosted)
+
+        y_semisupervised = [src2trg_image, src2trg_seg_resized]
+
+
+        if not registration:
+            # registration with synthetic source (NeurReg)
+            synth_target = transform(source, displacement_field)
+            synth_seg = transform(source_seg, displacement_field)
+
+            src2synth_image, pre_int_flow_synth = self.vxm_dense(source, synth_target)
+            pos_flow_synth = self.vxm_dense.integrate(pre_int_flow_synth)
+            seg_flow_synth = layers.ResizeTransform(
+                1/self.seg_resolution, 3)(pos_flow_synth)
+            
+            src2synth_seg = self.vxm_dense.transformer(source_seg, seg_flow_synth)
+            # src2synth_seg_resized = layers.ResizeTransform(
+            #     self.seg_resolution, 3)(src2synth_seg)
+
+            # FIXME: all the same stuff from the previous segmentation boosting applies here
+            src2synth_seg_concat = torch.concat(self.vxm_dense.unet_model.remaining[-1], src2synth_seg)
+            src2synth_seg_boosted = self.conv_w_softmax(src2synth_seg_concat)
+            src2synth_seg_resized = layers.ResizeTransform(
+                self.seg_resolution, 3)(src2synth_seg_boosted)
+
+            supervised_true = [displacement_field, synth_target, synth_seg]
+            y_supervised = [pre_int_flow_synth, src2synth_image, src2synth_seg_resized]
+
+            return supervised_true, y_supervised, y_semisupervised
+
+        return y_semisupervised
+
+
 class ConvBlock(nn.Module):
     """
     Specific convolutional block followed by leakyrelu for unet.

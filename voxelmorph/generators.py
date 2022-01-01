@@ -2,9 +2,13 @@ import os
 import sys
 import glob
 import numpy as np
+import SimpleITK as sitk
+from typing import Optional
+
+# from simulator import RegistrationSimulator3D
 
 from . import py
-
+from .simulator import RegistrationSimulator3D
 
 def volgen(
     vol_names,
@@ -140,6 +144,38 @@ def scan_to_atlas(vol_names, atlas, bidir=False, batch_size=1, no_warp=False, se
             outvols = [seg, scan] if bidir else [seg]
         if not no_warp:
             outvols.append(zeros)
+        yield (invols, outvols)
+
+def neurreg(vol_names, seg_names, labels, atlas_file=None, downsize=2):
+    gen = volgen(vol_names, segs=seg_names, np_var='vol')
+    regsim=None
+    zeros=None
+
+    # internal utility to generate downsampled prob seg from discrete seg
+    def split_seg(seg):
+        prob_seg = np.zeros((*seg.shape[:4], len(labels)))
+        for i, label in enumerate(labels):
+            prob_seg[0, ..., i] = seg[0, ..., 0] == label
+        return prob_seg[:, ::downsize, ::downsize, ::downsize, :]
+
+    while True:
+        src_vol, src_seg = next(gen)
+        trg_vol, trg_seg = next(gen)
+        src_seg, trg_seg = split_seg(src_seg), split_seg(trg_seg)
+        
+        if regsim is None:
+            reference_image = sitk.ReadImage(vol_names[0])
+            regsim = RegistrationSimulator3D(reference_image, reference_image.GetSize())
+        
+        displacement_field = regsim.get_displacement_array()
+
+        # cache zeros
+        if zeros is None:
+            shape = src_vol.shape[1:-1]
+            zeros = np.zeros((1, *shape, len(shape)))
+
+        invols = [src_vol, trg_vol, src_seg, displacement_field]
+        outvols = ()
         yield (invols, outvols)
 
 

@@ -76,6 +76,20 @@ class MSE:
         return torch.mean((y_true - y_pred) ** 2)
 
 
+class EPE:
+    """
+    End-point Error for supervised loss for flow field.
+    """
+
+    def __init__(self, size, ndim=3):
+        self.N = size
+        self.ndim = ndim
+
+    def loss(self, true_field, predicted_field):
+        tf, pf = (true_field.reshape((self.ndim, -1)), 
+                  predicted_field.reshape((self.ndim, -1)))
+        return (1./self.N) * torch.sqrt((tf - pf).pow(2).sum(dim=0))
+
 class Dice:
     """
     N-D dice for segmentation
