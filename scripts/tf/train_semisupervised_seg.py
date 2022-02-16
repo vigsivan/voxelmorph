@@ -147,6 +147,7 @@ if nb_devices > 1:
 else:
     save_callback = tf.keras.callbacks.ModelCheckpoint(save_filename, period=20)
 
+tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=model_dir, histogram_freq=1)
 model.compile(optimizer=tf.keras.optimizers.Adam(lr=args.lr), loss=losses, loss_weights=weights)
 
 # save starting weights
@@ -156,6 +157,6 @@ model.fit_generator(generator,
                     initial_epoch=args.initial_epoch,
                     epochs=args.epochs,
                     steps_per_epoch=args.steps_per_epoch,
-                    callbacks=[save_callback],
+                    callbacks=[save_callback, tensorboard_callback],
                     verbose=1
                     )
